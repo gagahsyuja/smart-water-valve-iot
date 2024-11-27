@@ -44,7 +44,8 @@ void setup()
 
     digitalWrite(relay_pin, HIGH);
 
-    Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASSWORD, "blynk.cloud", 80);
+    if (WiFi.isConnected())
+        Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASSWORD, "blynk.cloud", 80);
 
     sensors.begin();
     sensors.setResolution(12);
@@ -83,7 +84,9 @@ void loop()
     
     Serial.println("================================");
     // post(69, 69, "POSTED FROM ARDUINO COY");
-    Blynk.run();
+    
+    if (WiFi.isConnected())
+        Blynk.run();
 
     float distance = get_distance();
     float temperature = get_temperature();
@@ -101,7 +104,8 @@ void loop()
             relay(false);
     }
 
-    post(int(distance), int(percentage), String(temperature));
+    if (WiFi.isConnected())
+        post(int(distance), int(percentage), String(temperature));
 
     delay(250);
 }
@@ -112,7 +116,8 @@ void relay(bool is_close)
     {
         digitalWrite(relay_pin, HIGH);
 
-        Blynk.virtualWrite(V0, 0);
+        if (WiFi.isConnected())
+            Blynk.virtualWrite(V0, 0);
         // Blynk.virtualWrite(V3, 0);
 
         Serial.println("Relay closed");
@@ -122,7 +127,8 @@ void relay(bool is_close)
     {
         digitalWrite(relay_pin, LOW);
 
-        Blynk.virtualWrite(V0, 1);
+        if (WiFi.isConnected())
+            Blynk.virtualWrite(V0, 1);
         // Blynk.virtualWrite(V3, 1);
 
         Serial.println("Relay opened");
@@ -149,9 +155,12 @@ float get_distance()
     Serial.print("Distance (cm): ");
     Serial.println(distance_cm);
 
-    Blynk.virtualWrite(V1, distance_cm);
-    Blynk.virtualWrite(V3, get_percentage(distance_cm));
-
+    if (WiFi.isConnected())
+    {
+        Blynk.virtualWrite(V1, distance_cm);
+        Blynk.virtualWrite(V3, get_percentage(distance_cm));    
+    }
+    
     return distance_cm;
 }
 
