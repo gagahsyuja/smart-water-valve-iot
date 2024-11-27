@@ -87,6 +87,8 @@ void loop()
     
     if (WiFi.isConnected())
         Blynk.run();
+    else
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     float distance = get_distance();
     float temperature = get_temperature();
