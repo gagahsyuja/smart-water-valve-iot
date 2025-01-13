@@ -1,20 +1,20 @@
 #include <Arduino.h>
 #include <DallasTemperature.h>
 #include <OneWire.h>
-#include <BlynkSimpleEsp32.h>
+#include <WiFiManager.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <string.h>
-#include <WiFiCredentials.h>
-#include <BlynkCredentials.h>
 
-const int trig_pin = 25;
-const int echo_pin = 26;
-const int relay_pin = 33;
-const int one_wire_bus = 14;
+const int trig_pin = 16;
+const int echo_pin = 17;
+const int relay_pin = 27;
+const int one_wire_bus = 21;
 
-const String URL = "http://192.168.217.101:3000/api/information";
+WiFiManager wifiManager;
+
+const String URL = "https://doscom.org/api/information";
 
 // Sound speed in air
 #define SOUND_SPEED 340
@@ -23,12 +23,18 @@ const String URL = "http://192.168.217.101:3000/api/information";
 long ultrason_duration;
 float distance_cm;
 bool manual_override = false;
+float height = 100.0;
+float threshold = 10.0;
+bool relay = false;
+JsonObject information;
 
-void relay(bool);
+void set_relay_status(bool);
 float get_distance();
 float get_percentage(float);
 float get_temperature();
-void post(int, int, String);
+void post(int, int, String, bool, bool);
+bool get_manual_status();
+JsonObject get_information();
 
 OneWire one_wire(one_wire_bus);
 DallasTemperature sensors(&one_wire);
@@ -36,7 +42,6 @@ DallasTemperature sensors(&one_wire);
 void setup()
 {
     Serial.begin(9600);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
     pinMode(trig_pin, OUTPUT); // We configure the trig as output
     pinMode(echo_pin, INPUT); // We configure the echo as input
@@ -44,94 +49,77 @@ void setup()
 
     digitalWrite(relay_pin, HIGH);
 
-    if (WiFi.isConnected())
-        Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASSWORD, "blynk.cloud", 80);
+    wifiManager.autoConnect("SMART-TANDON");
 
     sensors.begin();
-    sensors.setResolution(12);
-}
 
-BLYNK_CONNECTED()
-{
-    Blynk.syncVirtual(V0);
-    Blynk.syncVirtual(V4);
-}
+    // manual_override = get_manual_status();
 
-BLYNK_WRITE(V0)
-{
-    if (manual_override)
+    if (WiFi.isConnected())
     {
-        if (param.asInt() == 0)
-        {
-            digitalWrite(relay_pin, HIGH);
-        }
+        information = get_information();
 
-        else
-        {
-            digitalWrite(relay_pin, LOW);
-        }
+        manual_override = information["state"]["manualMode"];
+        
+        height = information["config"]["height"];
+
+        threshold = information["config"]["threshold"];
     }
-}
-
-BLYNK_WRITE(V4)
-{
-    manual_override = param.asInt() == 1;
 }
 
 void loop()
 {
-    delay(250);
+    delay(100);
+
+    if (WiFi.isConnected())
+    {
+        information = get_information();
+    }
     
     Serial.println("================================");
-    // post(69, 69, "POSTED FROM ARDUINO COY");
     
-    if (WiFi.isConnected())
-        Blynk.run();
-    else
-        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
     float distance = get_distance();
     float temperature = get_temperature();
     float percentage = get_percentage(distance);
 
-    if (distance < 10.0)
+    if (!manual_override)
     {
-        if (!manual_override)
-            relay(true);
-    }
+        if (distance < threshold)
+        {
+            set_relay_status(true);
+        }
 
-    else
-    {
-        if (!manual_override)
-            relay(false);
+        else
+        {
+            set_relay_status(false);
+        }
     }
 
     if (WiFi.isConnected())
-        post(int(distance), int(percentage), String(temperature));
+    {
+        manual_override = information["state"]["manualMode"];
+        post(int(distance), int(percentage), String(temperature), manual_override, relay);
+    }
 
-    delay(250);
+    delay(100);
 }
 
-void relay(bool is_close)
+void set_relay_status(bool is_close)
 {
     if (is_close)
     {
-        digitalWrite(relay_pin, HIGH);
+        relay = true;
 
-        if (WiFi.isConnected())
-            Blynk.virtualWrite(V0, 0);
-        // Blynk.virtualWrite(V3, 0);
+        digitalWrite(relay_pin, HIGH);
 
         Serial.println("Relay closed");
     }
 
     else
     {
-        digitalWrite(relay_pin, LOW);
+        relay = false;
 
-        if (WiFi.isConnected())
-            Blynk.virtualWrite(V0, 1);
-        // Blynk.virtualWrite(V3, 1);
+        digitalWrite(relay_pin, LOW);
 
         Serial.println("Relay opened");
     }
@@ -142,6 +130,7 @@ float get_distance()
     // Set up the signal
     digitalWrite(trig_pin, LOW);
     delay(2);
+
     // Create a 10 µs impulse
     digitalWrite(trig_pin, HIGH);
     delayMicroseconds(TRIG_PULSE_DURATION_US);
@@ -150,25 +139,20 @@ float get_distance()
     // Return the wave propagation time (in µs)
     ultrason_duration = pulseIn(echo_pin, HIGH);
 
-    //distance calculation
+    // Distance calculation
     distance_cm = ultrason_duration * SOUND_SPEED/2 * 0.0001;
 
-    // We print the distance on the serial port
+    // print the distance on the serial port
     Serial.print("Distance (cm): ");
     Serial.println(distance_cm);
 
-    if (WiFi.isConnected())
-    {
-        Blynk.virtualWrite(V1, distance_cm);
-        Blynk.virtualWrite(V3, get_percentage(distance_cm));    
-    }
-    
     return distance_cm;
 }
 
 float get_percentage(float distance_cm)
 {
-    float percentage = (distance_cm - 10.0) / 90.0 * 100;
+    float percentage = distance_cm / height * 100;
+
     percentage = (100 - percentage) < 0
         ? 0
         : (100 - percentage) > 100
@@ -193,7 +177,6 @@ float get_temperature()
         Serial.print("Temps is ");
         Serial.print(temp_celsius);
         Serial.println(" celsius");    
-        Blynk.virtualWrite(V2, temp_celsius);
         
         return temp_celsius;
     }
@@ -206,15 +189,17 @@ float get_temperature()
     }
 }
 
-void post(int distance, int level, String temperature)
+void post(int distance, int level, String temperature, bool isManual, bool relay)
 {
     HTTPClient http;
-    StaticJsonDocument<256> root;
+    JsonDocument root;
     String json;
 
     root["distance"] = distance;
     root["level"] = level;
     root["temperature"] = temperature;
+    root["state"]["manualMode"] = isManual;
+    root["state"]["relay"] = relay;
     
     serializeJson(root, json);
 
@@ -231,4 +216,38 @@ void post(int distance, int level, String temperature)
     {
         Serial.println("Nope!");
     }
+}
+
+bool get_manual_status()
+{
+    HTTPClient http;
+    JsonDocument doc;
+    String response;
+
+    http.begin(URL);
+    http.GET();
+
+    http.getString();
+    deserializeJson(doc, response);
+    JsonObject root = doc.as<JsonObject>();
+
+    int result = root["state"]["manualMode"];
+
+    return result;
+}
+
+JsonObject get_information()
+{
+    HTTPClient http;
+    JsonDocument doc;
+    String response;
+
+    http.begin(URL);
+    http.GET();
+
+    http.getString();
+    deserializeJson(doc, response);
+    JsonObject root = doc.as<JsonObject>();
+
+    return root;
 }
